@@ -39,6 +39,12 @@ func (cfg *apiConfig) metricsResetHandler(writer http.ResponseWriter, request *h
 	writer.Write([]byte("OK"))
 }
 
+func (cfg *apiConfig) metricsPageHandler(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Add("Content-Type", "text/html")
+	writer.WriteHeader(http.StatusOK)
+	writer.Write([]byte(fmt.Sprintf("<html>\n  <body>\n    <h1>Welcome, Chirpy Admin</h1>\n    <p>Chirpy has been visited %d times!</p>\n  </body>\n</html>", cfg.fileserverHits.Load())))
+}
+
 func main() {
 	var err error
 
@@ -53,6 +59,8 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("GET /api/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /api/reset", apiCfg.metricsResetHandler)
+	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsPageHandler)
+	mux.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
 
 	fileHandler := http.FileServer(http.Dir("."))
 	mux.Handle("/app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(fileHandler)))
