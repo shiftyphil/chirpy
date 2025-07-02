@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 	"sync/atomic"
 )
 
@@ -48,6 +50,17 @@ func decodePostBody(body io.Reader, params interface{}) error {
 	return err
 }
 
+func replaceBannedWords(body string) string {
+	bannedWords := []string{"kerfuffle", "sharbert", "fornax"}
+	words := strings.Split(body, " ")
+	for i, word := range words {
+		if slices.Contains(bannedWords, strings.ToLower(word)) {
+			words = slices.Replace(words, i, i+1, "****")
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 func healthHandler(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
@@ -86,7 +99,7 @@ func validateHandler(writer http.ResponseWriter, request *http.Request) {
 		Body string `json:"body"`
 	}
 	type response struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	params := validatePostBody{}
@@ -101,7 +114,7 @@ func validateHandler(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	sendJsonSuccessResponse(writer, response{Valid: true})
+	sendJsonSuccessResponse(writer, response{CleanedBody: replaceBannedWords(params.Body)})
 }
 
 func main() {
