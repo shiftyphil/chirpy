@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 import _ "github.com/lib/pq"
 
@@ -36,6 +38,10 @@ func sendJsonResponse(writer http.ResponseWriter, response interface{}, status i
 
 func sendJsonSuccessResponse(writer http.ResponseWriter, response interface{}) {
 	sendJsonResponse(writer, response, http.StatusOK)
+}
+
+func sendJsonCreatedResponse(writer http.ResponseWriter, response interface{}) {
+	sendJsonResponse(writer, response, http.StatusCreated)
 }
 
 func sendJsonError(writer http.ResponseWriter, error string, status int) {
@@ -88,8 +94,19 @@ func (cfg *apiConfig) metricsHandler(writer http.ResponseWriter, request *http.R
 }
 
 func (cfg *apiConfig) metricsResetHandler(writer http.ResponseWriter, request *http.Request) {
-	writer.Header().Add("Content-Type", "text/plain; charset=utf-8")
+	if os.Getenv("PLATFORM") != "dev" {
+		writer.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	cfg.fileserverHits.Store(0)
+	err := cfg.db.DeleteAllUsers(request.Context())
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writer.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	writer.Write([]byte("OK"))
 }
@@ -121,6 +138,46 @@ func validateHandler(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	sendJsonSuccessResponse(writer, response{CleanedBody: replaceBannedWords(params.Body)})
+}
+
+// Users
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+func UserFromDb(dbUser database.User) *User {
+	return &User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+}
+
+func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *http.Request) {
+	type createUserPostBody struct {
+		Email string `json:"email"`
+	}
+
+	params := createUserPostBody{}
+	err := decodePostBody(request.Body, &params)
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	dbUser, err := cfg.db.CreateUser(request.Context(), params.Email)
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	user := UserFromDb(dbUser)
+
+	sendJsonCreatedResponse(writer, user)
 }
 
 func main() {
@@ -158,6 +215,8 @@ func main() {
 	mux.HandleFunc("POST /api/reset", apiCfg.metricsResetHandler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsPageHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
+
+	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 
 	mux.HandleFunc("POST /api/validate_chirp", validateHandler)
 
