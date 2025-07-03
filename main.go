@@ -1,19 +1,25 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/joho/godotenv"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"pjh.id.au/chirpy/v2/internal/database"
 	"slices"
 	"strings"
 	"sync/atomic"
 )
+import _ "github.com/lib/pq"
 
 // API
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	db             *database.Queries
 }
 
 func sendJsonResponse(writer http.ResponseWriter, response interface{}, status int) {
@@ -120,13 +126,32 @@ func validateHandler(writer http.ResponseWriter, request *http.Request) {
 func main() {
 	var err error
 
+	err = godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file: ", err)
+	}
+
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("Error opening database: ", err)
+		return
+	}
+	defer func(db *sql.DB) {
+		err := db.Close()
+		if err != nil {
+			log.Fatal("Error closing database: ", err)
+		}
+	}(db)
+	dbQueries := database.New(db)
+
 	mux := http.NewServeMux()
 	server := http.Server{
 		Handler: mux,
 		Addr:    ":8080",
 	}
 
-	apiCfg := apiConfig{}
+	apiCfg := apiConfig{db: dbQueries}
 
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("GET /api/metrics", apiCfg.metricsHandler)
