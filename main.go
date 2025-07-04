@@ -57,6 +57,14 @@ func sendJsonBadRequestError(writer http.ResponseWriter, error string) {
 	sendJsonError(writer, error, http.StatusBadRequest)
 }
 
+func sendJsonNotFoundError(writer http.ResponseWriter, error string) {
+	sendJsonError(writer, error, http.StatusNotFound)
+}
+
+func sendJsonInternalServerError(writer http.ResponseWriter, error string) {
+	sendJsonError(writer, error, http.StatusInternalServerError)
+}
+
 func decodePostBody(body io.Reader, params interface{}) error {
 	decoder := json.NewDecoder(body)
 	err := decoder.Decode(&params)
@@ -185,6 +193,42 @@ func validateChirp(body string) (string, error) {
 	return replaceBannedWords(body), nil
 }
 
+func (cfg *apiConfig) getChirpsHandler(writer http.ResponseWriter, request *http.Request) {
+	dbChirps, err := cfg.db.GetChirps(request.Context())
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+	}
+
+	chirps := make([]*Chirp, 0, len(dbChirps))
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, ChirpFromDb(dbChirp))
+	}
+
+	sendJsonSuccessResponse(writer, chirps)
+}
+
+func (cfg *apiConfig) getChirpHandler(writer http.ResponseWriter, request *http.Request) {
+	id, err := uuid.Parse(request.PathValue("chirpID"))
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(request.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		sendJsonNotFoundError(writer, "Chirp not found.")
+		return
+	}
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
+	}
+
+	chirp := ChirpFromDb(dbChirp)
+
+	sendJsonSuccessResponse(writer, chirp)
+}
+
 func (cfg *apiConfig) createChirpHandler(writer http.ResponseWriter, request *http.Request) {
 	type createChirpPostBody struct {
 		Body   string    `json:"body"`
@@ -253,6 +297,8 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 
+	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 
 	fileHandler := http.FileServer(http.Dir("."))
