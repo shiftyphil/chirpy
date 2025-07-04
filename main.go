@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"pjh.id.au/chirpy/v2/internal/auth"
 	"pjh.id.au/chirpy/v2/internal/database"
 	"slices"
 	"strings"
@@ -55,6 +56,10 @@ func sendJsonError(writer http.ResponseWriter, error string, status int) {
 
 func sendJsonBadRequestError(writer http.ResponseWriter, error string) {
 	sendJsonError(writer, error, http.StatusBadRequest)
+}
+
+func sendJsonUnauthorizedError(writer http.ResponseWriter, error string) {
+	sendJsonError(writer, error, http.StatusUnauthorized)
 }
 
 func sendJsonNotFoundError(writer http.ResponseWriter, error string) {
@@ -145,7 +150,8 @@ func UserFromDb(dbUser database.User) *User {
 
 func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *http.Request) {
 	type createUserPostBody struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	params := createUserPostBody{}
@@ -155,7 +161,13 @@ func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *htt
 		return
 	}
 
-	dbUser, err := cfg.db.CreateUser(request.Context(), params.Email)
+	password, err := auth.HashPassword(params.Password)
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
+	}
+
+	dbUser, err := cfg.db.CreateUser(request.Context(), database.CreateUserParams{Email: params.Email, HashedPassword: password})
 	if err != nil {
 		sendJsonBadRequestError(writer, err.Error())
 		return
@@ -164,6 +176,36 @@ func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *htt
 	user := UserFromDb(dbUser)
 
 	sendJsonCreatedResponse(writer, user)
+}
+
+func (cfg *apiConfig) loginHandler(writer http.ResponseWriter, request *http.Request) {
+	type loginPostBody struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	params := loginPostBody{}
+	err := decodePostBody(request.Body, &params)
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	dbUser, err := cfg.db.GetUserByEmail(request.Context(), params.Email)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Incorrect email or password")
+		return
+	}
+
+	err = auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Incorrect email or password")
+		return
+	}
+
+	user := UserFromDb(dbUser)
+
+	sendJsonSuccessResponse(writer, user)
 }
 
 // Chirps
@@ -296,6 +338,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
 
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("POST /api/login", apiCfg.loginHandler)
 
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
