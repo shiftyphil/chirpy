@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -117,29 +118,6 @@ func (cfg *apiConfig) metricsPageHandler(writer http.ResponseWriter, request *ht
 	writer.Write([]byte(fmt.Sprintf("<html>\n  <body>\n    <h1>Welcome, Chirpy Admin</h1>\n    <p>Chirpy has been visited %d times!</p>\n  </body>\n</html>", cfg.fileserverHits.Load())))
 }
 
-func validateHandler(writer http.ResponseWriter, request *http.Request) {
-	type validatePostBody struct {
-		Body string `json:"body"`
-	}
-	type response struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
-	params := validatePostBody{}
-	err := decodePostBody(request.Body, &params)
-	if err != nil {
-		sendJsonBadRequestError(writer, err.Error())
-		return
-	}
-
-	if len(params.Body) > 140 {
-		sendJsonBadRequestError(writer, "Chirp is too long")
-		return
-	}
-
-	sendJsonSuccessResponse(writer, response{CleanedBody: replaceBannedWords(params.Body)})
-}
-
 // Users
 type User struct {
 	ID        uuid.UUID `json:"id"`
@@ -180,6 +158,63 @@ func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *htt
 	sendJsonCreatedResponse(writer, user)
 }
 
+// Chirps
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserId    uuid.UUID `json:"user_id"`
+}
+
+func ChirpFromDb(dbChirp database.Chirp) *Chirp {
+	return &Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		UserId:    dbChirp.UserID,
+		Body:      dbChirp.Body,
+	}
+}
+
+func validateChirp(body string) (string, error) {
+	if len(body) > 140 {
+		return "", errors.New("chirp is too long")
+	}
+
+	return replaceBannedWords(body), nil
+}
+
+func (cfg *apiConfig) createChirpHandler(writer http.ResponseWriter, request *http.Request) {
+	type createChirpPostBody struct {
+		Body   string    `json:"body"`
+		UserId uuid.UUID `json:"user_id"`
+	}
+
+	params := createChirpPostBody{}
+	err := decodePostBody(request.Body, &params)
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	cleanBody, err := validateChirp(params.Body)
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	dbChirp, err := cfg.db.CreateChirp(request.Context(), database.CreateChirpParams{Body: cleanBody, UserID: params.UserId})
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	chirp := ChirpFromDb(dbChirp)
+
+	sendJsonCreatedResponse(writer, chirp)
+}
+
 func main() {
 	var err error
 
@@ -218,7 +253,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 
-	mux.HandleFunc("POST /api/validate_chirp", validateHandler)
+	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 
 	fileHandler := http.FileServer(http.Dir("."))
 	mux.Handle("/app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(fileHandler)))
