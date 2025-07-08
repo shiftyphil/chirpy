@@ -24,6 +24,7 @@ import _ "github.com/lib/pq"
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	authSecret     string
 }
 
 func sendJsonResponse(writer http.ResponseWriter, response interface{}, status int) {
@@ -180,8 +181,16 @@ func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *htt
 
 func (cfg *apiConfig) loginHandler(writer http.ResponseWriter, request *http.Request) {
 	type loginPostBody struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_second"`
+	}
+	type loginResponse struct {
+		Id        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+		Token     string    `json:"token"`
 	}
 
 	params := loginPostBody{}
@@ -205,7 +214,24 @@ func (cfg *apiConfig) loginHandler(writer http.ResponseWriter, request *http.Req
 
 	user := UserFromDb(dbUser)
 
-	sendJsonSuccessResponse(writer, user)
+	expiresIn := params.ExpiresInSeconds
+	if expiresIn <= 0 || expiresIn > 3600 {
+		expiresIn = 3600
+	}
+
+	jwt, err := auth.MakeJWT(user.ID, cfg.authSecret, time.Duration(expiresIn)*time.Second)
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
+	}
+
+	sendJsonSuccessResponse(writer, loginResponse{
+		Id:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+		Token:     jwt,
+	})
 }
 
 // Chirps
@@ -273,12 +299,23 @@ func (cfg *apiConfig) getChirpHandler(writer http.ResponseWriter, request *http.
 
 func (cfg *apiConfig) createChirpHandler(writer http.ResponseWriter, request *http.Request) {
 	type createChirpPostBody struct {
-		Body   string    `json:"body"`
-		UserId uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
+	}
+
+	jwt, err := auth.GetBearerToken(request.Header)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	userId, err := auth.ValidateJWT(jwt, cfg.authSecret)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
 	}
 
 	params := createChirpPostBody{}
-	err := decodePostBody(request.Body, &params)
+	err = decodePostBody(request.Body, &params)
 	if err != nil {
 		sendJsonBadRequestError(writer, err.Error())
 		return
@@ -290,7 +327,7 @@ func (cfg *apiConfig) createChirpHandler(writer http.ResponseWriter, request *ht
 		return
 	}
 
-	dbChirp, err := cfg.db.CreateChirp(request.Context(), database.CreateChirpParams{Body: cleanBody, UserID: params.UserId})
+	dbChirp, err := cfg.db.CreateChirp(request.Context(), database.CreateChirpParams{Body: cleanBody, UserID: userId})
 	if err != nil {
 		sendJsonBadRequestError(writer, err.Error())
 		return
@@ -329,7 +366,9 @@ func main() {
 		Addr:    ":8080",
 	}
 
-	apiCfg := apiConfig{db: dbQueries}
+	authSecret := os.Getenv("AUTH_SECRET")
+
+	apiCfg := apiConfig{db: dbQueries, authSecret: authSecret}
 
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("GET /api/metrics", apiCfg.metricsHandler)

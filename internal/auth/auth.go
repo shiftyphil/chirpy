@@ -1,7 +1,12 @@
 package auth
 
 import (
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"net/http"
+	"strings"
+	"time"
 )
 
 func HashPassword(password string) (string, error) {
@@ -15,4 +20,46 @@ func HashPassword(password string) (string, error) {
 func CheckPasswordHash(password, hash string) error {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err
+}
+
+func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
+	now := time.Now().UTC()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Issuer: "chirpy", Subject: userID.String(),
+		IssuedAt: &jwt.NumericDate{Time: now}, ExpiresAt: &jwt.NumericDate{Time: now.Add(expiresIn)},
+	})
+
+	return token.SignedString([]byte(tokenSecret))
+}
+
+func ValidateJWT(tokenString string, tokenSecret string) (uuid.UUID, error) {
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(tokenSecret), nil
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	subject, err := claims.GetSubject()
+	if err != nil {
+		return uuid.Nil, err
+	}
+	userID, err := uuid.Parse(subject)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return userID, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	authHeader := headers.Get("Authorization")
+	if authHeader == "" {
+		return "", nil
+	}
+	bearerToken := strings.Split(authHeader, " ")
+	if len(bearerToken) != 2 || strings.ToLower(bearerToken[0]) != "bearer" {
+		return "", nil
+	}
+	return bearerToken[1], nil
 }
