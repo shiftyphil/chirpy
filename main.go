@@ -63,6 +63,10 @@ func sendJsonUnauthorizedError(writer http.ResponseWriter, error string) {
 	sendJsonError(writer, error, http.StatusUnauthorized)
 }
 
+func sendJsonForbiddenError(writer http.ResponseWriter, error string) {
+	sendJsonError(writer, error, http.StatusForbidden)
+}
+
 func sendJsonNotFoundError(writer http.ResponseWriter, error string) {
 	sendJsonError(writer, error, http.StatusNotFound)
 }
@@ -435,6 +439,52 @@ func (cfg *apiConfig) createChirpHandler(writer http.ResponseWriter, request *ht
 	sendJsonCreatedResponse(writer, chirp)
 }
 
+func (cfg *apiConfig) deleteChirpHandler(writer http.ResponseWriter, request *http.Request) {
+	jwt, err := auth.GetBearerToken(request.Header)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	userId, err := auth.ValidateJWT(jwt, cfg.authSecret)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	id, err := uuid.Parse(request.PathValue("chirpID"))
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(request.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		sendJsonNotFoundError(writer, "Chirp not found.")
+		return
+	}
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+	if dbChirp.UserID != userId {
+		sendJsonForbiddenError(writer, "Unauthorized")
+		return
+	}
+
+	rows, err := cfg.db.DeleteChirpWithUser(request.Context(), database.DeleteChirpWithUserParams{ID: id, UserID: userId})
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+	if rows == 0 {
+		sendJsonBadRequestError(writer, "Delete failed. Chirp not found or not owned by user?")
+		return
+	}
+
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func main() {
 	var err error
 
@@ -482,6 +532,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
 
 	fileHandler := http.FileServer(http.Dir("."))
 	mux.Handle("/app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(fileHandler)))
