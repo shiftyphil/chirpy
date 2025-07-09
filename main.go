@@ -181,16 +181,16 @@ func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *htt
 
 func (cfg *apiConfig) loginHandler(writer http.ResponseWriter, request *http.Request) {
 	type loginPostBody struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_second"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	type loginResponse struct {
-		Id        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-		Token     string    `json:"token"`
+		Id           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
 	}
 
 	params := loginPostBody{}
@@ -214,24 +214,79 @@ func (cfg *apiConfig) loginHandler(writer http.ResponseWriter, request *http.Req
 
 	user := UserFromDb(dbUser)
 
-	expiresIn := params.ExpiresInSeconds
-	if expiresIn <= 0 || expiresIn > 3600 {
-		expiresIn = 3600
+	jwt, err := auth.MakeJWT(user.ID, cfg.authSecret, time.Duration(3600)*time.Second)
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
 	}
 
-	jwt, err := auth.MakeJWT(user.ID, cfg.authSecret, time.Duration(expiresIn)*time.Second)
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
+	}
+
+	_, err = cfg.db.CreateRefreshToken(request.Context(), database.CreateRefreshTokenParams{Token: refreshToken, UserID: user.ID, Secs: 60 * 60 * 60 * 24})
 	if err != nil {
 		sendJsonInternalServerError(writer, err.Error())
 		return
 	}
 
 	sendJsonSuccessResponse(writer, loginResponse{
-		Id:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     jwt,
+		Id:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        jwt,
+		RefreshToken: refreshToken,
 	})
+}
+
+func (cfg *apiConfig) refreshHandler(writer http.ResponseWriter, request *http.Request) {
+	type refreshResponse struct {
+		Token string `json:"token"`
+	}
+
+	refreshToken, err := auth.GetBearerToken(request.Header)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	dbRefreshToken, err := cfg.db.GetRefreshToken(request.Context(), refreshToken)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	if dbRefreshToken.RevokedAt.Valid || dbRefreshToken.ExpiresAt.Before(time.Now()) {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	token, err := auth.MakeJWT(dbRefreshToken.UserID, cfg.authSecret, time.Duration(3600)*time.Second)
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
+	}
+
+	sendJsonSuccessResponse(writer, refreshResponse{Token: token})
+}
+
+func (cfg *apiConfig) revokeHandler(writer http.ResponseWriter, request *http.Request) {
+	refreshToken, err := auth.GetBearerToken(request.Header)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	_, err = cfg.db.RevokeRefreshToken(request.Context(), refreshToken)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 // Chirps
@@ -378,6 +433,8 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.loginHandler)
+	mux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
+	mux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
 
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
