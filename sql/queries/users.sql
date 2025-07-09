@@ -8,7 +8,7 @@ VALUES (gen_random_uuid(),
 RETURNING *;
 
 -- name: GetUserByEmail :one
-SELECT id, created_at, updated_at, email, hashed_password
+SELECT id, created_at, updated_at, email, hashed_password, is_chirpy_red
 FROM users
 WHERE email = $1;
 
@@ -19,6 +19,12 @@ SET updated_at = NOW(),
     hashed_password = $3
 WHERE id = $1
 RETURNING *;
+
+-- name: UpgradeUser :execrows
+UPDATE users
+SET updated_at = NOW(),
+    is_chirpy_red = true
+WHERE id = $1;
 
 -- name: DeleteAllUsers :exec
 DELETE FROM users;
