@@ -25,6 +25,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	authSecret     string
+	polkaKey       string
 }
 
 func sendJsonResponse(writer http.ResponseWriter, response interface{}, status int) {
@@ -497,8 +498,14 @@ func (cfg *apiConfig) polkaWebHookHandler(writer http.ResponseWriter, request *h
 		} `json:"data"`
 	}
 
+	key, err := auth.GetAPIKey(request.Header)
+	if err != nil || key != cfg.polkaKey {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
 	params := polkaWebHookPostBody{}
-	err := decodePostBody(request.Body, &params)
+	err = decodePostBody(request.Body, &params)
 	if err != nil {
 		sendJsonBadRequestError(writer, err.Error())
 		return
@@ -553,8 +560,9 @@ func main() {
 	}
 
 	authSecret := os.Getenv("AUTH_SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 
-	apiCfg := apiConfig{db: dbQueries, authSecret: authSecret}
+	apiCfg := apiConfig{db: dbQueries, authSecret: authSecret, polkaKey: polkaKey}
 
 	mux.HandleFunc("GET /api/healthz", healthHandler)
 	mux.HandleFunc("GET /api/metrics", apiCfg.metricsHandler)
