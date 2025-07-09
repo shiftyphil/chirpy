@@ -10,13 +10,17 @@ RETURNING *;
 -- name: GetChirps :many
 SELECT id, created_at, updated_at, body, user_id
 FROM chirps
-ORDER BY created_at;
+ORDER BY
+    CASE WHEN NOT @reverse::boolean THEN created_at END ASC,
+    CASE WHEN @reverse::boolean THEN created_at END DESC;
 
 -- name: GetChirpsByAuthor :many
 SELECT id, created_at, updated_at, body, user_id
 FROM chirps
 WHERE user_id = $1
-ORDER BY created_at;
+ORDER BY
+    CASE WHEN NOT @reverse::boolean THEN created_at END ASC,
+    CASE WHEN @reverse::boolean THEN created_at END DESC;
 
 -- name: GetChirp :one
 SELECT id, created_at, updated_at, body, user_id

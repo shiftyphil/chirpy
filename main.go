@@ -371,6 +371,14 @@ func (cfg *apiConfig) getChirpsHandler(writer http.ResponseWriter, request *http
 	var err error
 	var dbChirps []database.Chirp
 
+	reverse := false
+	sortOrderQueryParam := request.URL.Query().Get("sort")
+	if sortOrderQueryParam != "" {
+		reverse = sortOrderQueryParam == "desc"
+	}
+
+	fmt.Println("reverse: ", reverse)
+
 	authorIdString := request.URL.Query().Get("author_id")
 	if authorIdString != "" {
 		authorId, err := uuid.Parse(authorIdString)
@@ -378,14 +386,14 @@ func (cfg *apiConfig) getChirpsHandler(writer http.ResponseWriter, request *http
 			sendJsonBadRequestError(writer, err.Error())
 			return
 		}
-		dbChirps, err = cfg.db.GetChirpsByAuthor(request.Context(), authorId)
+		dbChirps, err = cfg.db.GetChirpsByAuthor(request.Context(), database.GetChirpsByAuthorParams{UserID: authorId, Reverse: reverse})
 		if err != nil {
 			sendJsonInternalServerError(writer, err.Error())
 			return
 		}
 
 	} else {
-		dbChirps, err = cfg.db.GetChirps(request.Context())
+		dbChirps, err = cfg.db.GetChirps(request.Context(), reverse)
 		if err != nil {
 			sendJsonInternalServerError(writer, err.Error())
 		}
