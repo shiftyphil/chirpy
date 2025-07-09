@@ -179,6 +179,48 @@ func (cfg *apiConfig) createUserHandler(writer http.ResponseWriter, request *htt
 	sendJsonCreatedResponse(writer, user)
 }
 
+func (cfg *apiConfig) updateUserHandler(writer http.ResponseWriter, request *http.Request) {
+	type updateUserPostBody struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	jwt, err := auth.GetBearerToken(request.Header)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	userId, err := auth.ValidateJWT(jwt, cfg.authSecret)
+	if err != nil {
+		sendJsonUnauthorizedError(writer, "Unauthorized")
+		return
+	}
+
+	params := updateUserPostBody{}
+	err = decodePostBody(request.Body, &params)
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	password, err := auth.HashPassword(params.Password)
+	if err != nil {
+		sendJsonInternalServerError(writer, err.Error())
+		return
+	}
+
+	dbUser, err := cfg.db.UpdateUser(request.Context(), database.UpdateUserParams{ID: userId, Email: params.Email, HashedPassword: password})
+	if err != nil {
+		sendJsonBadRequestError(writer, err.Error())
+		return
+	}
+
+	user := UserFromDb(dbUser)
+
+	sendJsonSuccessResponse(writer, user)
+}
+
 func (cfg *apiConfig) loginHandler(writer http.ResponseWriter, request *http.Request) {
 	type loginPostBody struct {
 		Email    string `json:"email"`
@@ -432,6 +474,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.metricsResetHandler)
 
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.loginHandler)
 	mux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
 	mux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
