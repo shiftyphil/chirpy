@@ -368,9 +368,27 @@ func validateChirp(body string) (string, error) {
 }
 
 func (cfg *apiConfig) getChirpsHandler(writer http.ResponseWriter, request *http.Request) {
-	dbChirps, err := cfg.db.GetChirps(request.Context())
-	if err != nil {
-		sendJsonInternalServerError(writer, err.Error())
+	var err error
+	var dbChirps []database.Chirp
+
+	authorIdString := request.URL.Query().Get("author_id")
+	if authorIdString != "" {
+		authorId, err := uuid.Parse(authorIdString)
+		if err != nil {
+			sendJsonBadRequestError(writer, err.Error())
+			return
+		}
+		dbChirps, err = cfg.db.GetChirpsByAuthor(request.Context(), authorId)
+		if err != nil {
+			sendJsonInternalServerError(writer, err.Error())
+			return
+		}
+
+	} else {
+		dbChirps, err = cfg.db.GetChirps(request.Context())
+		if err != nil {
+			sendJsonInternalServerError(writer, err.Error())
+		}
 	}
 
 	chirps := make([]*Chirp, 0, len(dbChirps))
